@@ -70,7 +70,7 @@ def _parse_tool_provider_id(tool_provider: str) -> tuple[str, str]:
 
     parts = tool_provider.split("/")
     if len(parts) == 2:
-        return parts[0], parts[1]
+        return tool_provider, parts[1]
     if len(parts) == 3:
         return "/".join(parts[:2]), parts[2]
 

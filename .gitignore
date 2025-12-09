@@ -1,3 +1,6 @@
 *.egg-info
 *.pyc
 *.pyo
+.venv
+__pycache__/
+build/

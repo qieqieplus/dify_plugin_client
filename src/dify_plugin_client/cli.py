@@ -8,7 +8,21 @@ from pathlib import Path
 from typing import Any
 
 from dify_plugin_client import DifyPluginClient, PluginConfig
+from dify_plugin_client.entities.plugin import PluginInstallationSource
 from dify_plugin_client.entities.tools import ToolInvokeMessage
+
+DEFAULT_CONFIG_PATH = Path.home() / ".dify"
+DEFAULT_URL = "http://localhost:5002"
+DEFAULT_KEY = "plugin-api-key"
+DEFAULT_TIMEOUT = 300.0
+TENANT_REQUIRED_COMMANDS = {
+    "list",
+    "upload-pkg",
+    "upload-bundle",
+    "list-tools",
+    "invoke",
+    "install",
+}
 
 
 def _json_default_serializer(obj: Any) -> Any:
@@ -35,6 +49,75 @@ def _parse_json_arg(value: str | None, file_path: str | None, default: dict[str,
     return default
 
 
+def _load_settings(path: Path) -> dict[str, Any]:
+    """
+    Load optional CLI defaults from a config file (expects a JSON object).
+    """
+
+    resolved = path.expanduser()
+    if not resolved.exists():
+        return {}
+    if resolved.is_dir():
+        raise ValueError(f"Config path {resolved} is a directory, expected a file.")
+
+    try:
+        raw = resolved.read_text().strip()
+    except OSError as exc:
+        raise ValueError(f"Failed to read config file {resolved}: {exc}") from exc
+
+    if not raw:
+        return {}
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Config file must be valid JSON: {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError("Config file must contain a JSON object at the top level.")
+
+    return parsed
+
+
+def _coerce_timeout(*candidates: Any) -> float:
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if isinstance(candidate, (int, float)):
+            return float(candidate)
+        if isinstance(candidate, str):
+            try:
+                return float(candidate)
+            except ValueError as exc:
+                raise ValueError("Timeout must be a number") from exc
+    return DEFAULT_TIMEOUT
+
+
+def _resolve_settings(args: argparse.Namespace, parser: argparse.ArgumentParser) -> argparse.Namespace:
+    config_path = Path(getattr(args, "config", DEFAULT_CONFIG_PATH))
+    settings = _load_settings(config_path)
+
+    env_settings = {
+        "url": os.getenv("DIFY_PLUGIN_DAEMON_URL"),
+        "key": os.getenv("DIFY_PLUGIN_DAEMON_KEY"),
+        "timeout": os.getenv("DIFY_PLUGIN_DAEMON_TIMEOUT"),
+        "tenant": os.getenv("DIFY_PLUGIN_TENANT_ID") or os.getenv("DIFY_PLUGIN_TENANT"),
+    }
+
+    args.url = args.url or env_settings["url"] or settings.get("url") or DEFAULT_URL
+    args.key = args.key or env_settings["key"] or settings.get("key") or DEFAULT_KEY
+    args.timeout = _coerce_timeout(args.timeout, env_settings["timeout"], settings.get("timeout"), DEFAULT_TIMEOUT)
+
+    if hasattr(args, "tenant"):
+        args.tenant = args.tenant or env_settings["tenant"] or settings.get("tenant")
+        if args.command in TENANT_REQUIRED_COMMANDS and not args.tenant:
+            parser.error(
+                "Tenant ID is required. Provide --tenant, set DIFY_PLUGIN_TENANT_ID, or set tenant in the config file."
+            )
+
+    return args
+
+
 def _build_client(args: argparse.Namespace) -> DifyPluginClient:
     config = PluginConfig(
         url=args.url,
@@ -46,20 +129,25 @@ def _build_client(args: argparse.Namespace) -> DifyPluginClient:
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help=f"Path to config file with defaults (default: {DEFAULT_CONFIG_PATH}).",
+    )
+    parser.add_argument(
         "--url",
-        default=os.getenv("DIFY_PLUGIN_DAEMON_URL", "http://localhost:5002"),
-        help="Plugin daemon URL (env: DIFY_PLUGIN_DAEMON_URL)",
+        default=None,
+        help="Plugin daemon URL (env: DIFY_PLUGIN_DAEMON_URL).",
     )
     parser.add_argument(
         "--key",
-        default=os.getenv("DIFY_PLUGIN_DAEMON_KEY", "plugin-api-key"),
-        help="Plugin daemon API key (env: DIFY_PLUGIN_DAEMON_KEY)",
+        default=None,
+        help="Plugin daemon API key (env: DIFY_PLUGIN_DAEMON_KEY).",
     )
     parser.add_argument(
         "--timeout",
         type=float,
-        default=float(os.getenv("DIFY_PLUGIN_DAEMON_TIMEOUT", "300")),
-        help="Request timeout in seconds (env: DIFY_PLUGIN_DAEMON_TIMEOUT)",
+        default=None,
+        help="Request timeout in seconds (env: DIFY_PLUGIN_DAEMON_TIMEOUT).",
     )
 
 
@@ -73,7 +161,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     list_parser = subparsers.add_parser("list", help="List installed plugins for a tenant.")
-    list_parser.add_argument("--tenant", required=True, help="Tenant ID.")
+    list_parser.add_argument("--tenant", help="Tenant ID.")
     list_parser.add_argument("--page", type=int, default=1, help="Page number (default: 1).")
     list_parser.add_argument("--page-size", type=int, default=256, help="Page size (default: 256).")
     list_parser.add_argument(
@@ -83,7 +171,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     upload_pkg_parser = subparsers.add_parser("upload-pkg", help="Upload a .difypkg plugin package.")
-    upload_pkg_parser.add_argument("--tenant", required=True, help="Tenant ID.")
+    upload_pkg_parser.add_argument("--tenant", help="Tenant ID.")
     upload_pkg_parser.add_argument("--file", required=True, help="Path to the .difypkg file.")
     upload_pkg_parser.add_argument(
         "--verify-signature",
@@ -92,7 +180,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     upload_bundle_parser = subparsers.add_parser("upload-bundle", help="Upload a bundle of plugins.")
-    upload_bundle_parser.add_argument("--tenant", required=True, help="Tenant ID.")
+    upload_bundle_parser.add_argument("--tenant", help="Tenant ID.")
     upload_bundle_parser.add_argument("--file", required=True, help="Path to the bundle file.")
     upload_bundle_parser.add_argument(
         "--verify-signature",
@@ -104,14 +192,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "list-tools",
         help="List tool providers (or a single provider) for a tenant.",
     )
-    tools_parser.add_argument("--tenant", required=True, help="Tenant ID.")
+    tools_parser.add_argument("--tenant", help="Tenant ID.")
     tools_parser.add_argument(
         "--provider",
         help="Specific provider in plugin_id/provider_name or organization/plugin_name/provider_name form. If omitted, all providers are listed.",
     )
 
     invoke_parser = subparsers.add_parser("invoke", help="Invoke a tool.")
-    invoke_parser.add_argument("--tenant", required=True, help="Tenant ID.")
+    invoke_parser.add_argument("--tenant", help="Tenant ID.")
     invoke_parser.add_argument("--user", required=True, help="User ID for the invocation.")
     invoke_parser.add_argument(
         "--provider",
@@ -136,6 +224,40 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a JSON file containing tool parameters.",
     )
 
+    install_parser = subparsers.add_parser(
+        "install",
+        help="Install plugins from identifiers or upload-and-install a .difypkg.",
+    )
+    install_parser.add_argument("--tenant", help="Tenant ID.")
+    install_parser.add_argument(
+        "--identifier",
+        action="append",
+        help="Plugin unique identifier to install. Can be provided multiple times.",
+    )
+    install_parser.add_argument(
+        "--file",
+        help="Path to a .difypkg file to upload and install.",
+    )
+    install_parser.add_argument(
+        "--source",
+        choices=[source.value for source in PluginInstallationSource],
+        default=PluginInstallationSource.Package.value,
+        help="Installation source when using identifiers (default: Package).",
+    )
+    install_parser.add_argument(
+        "--meta",
+        help="Metadata JSON applied to each identifier during install.",
+    )
+    install_parser.add_argument(
+        "--meta-file",
+        help="Path to a JSON file containing metadata applied to each identifier during install.",
+    )
+    install_parser.add_argument(
+        "--verify-signature",
+        action="store_true",
+        help="Verify package signature when using --file.",
+    )
+
     return parser
 
 
@@ -152,7 +274,7 @@ def _handle_list(args: argparse.Namespace) -> int:
         return 0
 
     for plugin in plugins:
-        print(f"{plugin.identity.name} ({plugin.plugin_unique_identifier})")
+        print(f"{plugin.name} ({plugin.plugin_unique_identifier})")
     return 0
 
 
@@ -177,6 +299,55 @@ def _handle_upload_bundle(args: argparse.Namespace) -> int:
         verify_signature=args.verify_signature,
     )
     print(json.dumps(dependencies, indent=2, default=_json_default_serializer))
+    return 0
+
+
+def _handle_install(args: argparse.Namespace) -> int:
+    client = _build_client(args)
+
+    identifiers: list[str] = []
+    metas: list[dict[str, Any]] = []
+    meta = _parse_json_arg(args.meta, args.meta_file, default={})
+    if not isinstance(meta, dict):
+        raise ValueError("--meta must be a JSON object")
+
+    if args.identifier:
+        identifiers.extend(args.identifier)
+
+    if args.file:
+        pkg_bytes = Path(args.file).read_bytes()
+        decoded = client.upload_pkg(
+            tenant_id=args.tenant,
+            pkg=pkg_bytes,
+            verify_signature=args.verify_signature,
+        )
+        identifiers.append(decoded.unique_identifier)
+
+    if not identifiers:
+        raise ValueError("Provide at least one --identifier or --file to install.")
+
+    metas = [meta for _ in identifiers]
+    source = PluginInstallationSource.Package if args.file else PluginInstallationSource(args.source)
+
+    response = client.install_from_identifiers(
+        tenant_id=args.tenant,
+        identifiers=identifiers,
+        source=source,
+        metas=metas,
+    )
+
+    print(
+        json.dumps(
+            {
+                "task_id": response.task_id,
+                "all_installed": response.all_installed,
+                "identifiers": identifiers,
+            },
+            indent=2,
+            default=_json_default_serializer,
+        )
+    )
+
     return 0
 
 
@@ -228,6 +399,7 @@ def _handle_invoke(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    args = _resolve_settings(args, parser)
 
     try:
         match args.command:
@@ -237,6 +409,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _handle_upload_pkg(args)
             case "upload-bundle":
                 return _handle_upload_bundle(args)
+            case "install":
+                return _handle_install(args)
             case "list-tools":
                 return _handle_list_tools(args)
             case "invoke":
