@@ -15,3 +15,7 @@ except ImportError:
 
         def __str__(self) -> str:  # pragma: no cover - trivial
             return str(self.value)
+
+        @staticmethod
+        def _generate_next_value_(name, start, count, last_values):
+            return name.lower()

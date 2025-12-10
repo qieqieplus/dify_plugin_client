@@ -16,29 +16,10 @@ from dify_plugin_client import DifyPluginClient, PluginConfig
 config = PluginConfig(
     url="http://localhost:5002",  # daemon base URL
     key="plugin-api-key",         # X-Api-Key
-    timeout=300.0,                # float or httpx.Timeout
+    timeout=30.0,                # float or httpx.Timeout
 )
 client = DifyPluginClient(config)
 ```
-
-### CLI defaults file
-
-The CLI can read defaults (URL, key, timeout, tenant) from a config file.
-By default it looks for `~/.dify`, and you can point elsewhere with
-`--config /path/to/file`. The file must be a JSON object:
-
-```json
-{
-  "url": "http://localhost:5002",
-  "key": "plugin-api-key",
-  "tenant": "your-tenant-id",
-  "timeout": 120
-}
-```
-
-Precedence: CLI flags > environment variables (`DIFY_PLUGIN_DAEMON_URL`,
-`DIFY_PLUGIN_DAEMON_KEY`, `DIFY_PLUGIN_DAEMON_TIMEOUT`,
-`DIFY_PLUGIN_TENANT_ID`) > config file > built-in defaults.
 
 ## API surface
 
@@ -166,14 +147,32 @@ client.upgrade_plugin(
 
 After installation, the CLI mirrors key operations:
 ```bash
-dify-plugin-client list --tenant <tenant-id>
-dify-plugin-client upload-pkg --tenant <tenant-id> --file ./my_plugin.difypkg
-dify-plugin-client install --tenant <tenant-id> --file ./my_plugin.difypkg
-dify-plugin-client install --tenant <tenant-id> --identifier plugin@1.0.0
-dify-plugin-client invoke --tenant <tenant-id> --user <user-id> \
+dify-plugin-client list [--tenant <tenant-id>]
+dify-plugin-client upload-pkg [--tenant <tenant-id>] --file ./my_plugin.difypkg
+dify-plugin-client install [--tenant <tenant-id>] --file ./my_plugin.difypkg
+dify-plugin-client install [--tenant <tenant-id>] --identifier plugin@1.0.0
+dify-plugin-client invoke [--tenant <tenant-id>] --user <user-id> \
   --provider plugin_id/provider_name --tool tool_name --params '{"query":"hello"}'
 ```
 
+### CLI configurations
+
 Environment defaults: `DIFY_PLUGIN_DAEMON_URL`, `DIFY_PLUGIN_DAEMON_KEY`,
-`DIFY_PLUGIN_DAEMON_TIMEOUT`, `DIFY_PLUGIN_TENANT_ID`. You can also drop
-defaults in `~/.dify` (JSON or KEY=VALUE).
+`DIFY_PLUGIN_DAEMON_TIMEOUT`, `DIFY_PLUGIN_TENANT_ID`.
+
+The CLI can also read defaults (URL, key, timeout, optional tenant) from a config
+file. By default it looks for `~/.dify`, and you can point elsewhere with
+`--config /path/to/file`. The file must be a JSON object:
+
+```json
+{
+  "url": "http://localhost:5002",
+  "key": "plugin-api-key",
+  "timeout": 120,
+  "tenant": "your-tenant-id"
+}
+```
+Precedence:
+CLI flags > environment variables (`DIFY_PLUGIN_DAEMON_URL`,
+`DIFY_PLUGIN_DAEMON_KEY`, `DIFY_PLUGIN_DAEMON_TIMEOUT`,
+`DIFY_PLUGIN_TENANT_ID`) > config file > built-in defaults.

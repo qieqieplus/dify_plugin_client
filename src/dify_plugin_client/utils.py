@@ -175,7 +175,7 @@ def resolve_client_config(
         timeout,
         env_map.get("DIFY_PLUGIN_DAEMON_TIMEOUT"),
         settings.get("timeout"),
-        DEFAULT_TIMEOUT,
+        default=DEFAULT_TIMEOUT,
     )
 
     return PluginConfig(
