@@ -10,11 +10,17 @@ from typing import Any
 from dify_plugin_client import DifyPluginClient, PluginConfig
 from dify_plugin_client.entities.plugin import PluginInstallationSource
 from dify_plugin_client.entities.tools import ToolInvokeMessage
-
-DEFAULT_CONFIG_PATH = Path.home() / ".dify"
-DEFAULT_URL = "http://localhost:5002"
-DEFAULT_KEY = "plugin-api-key"
-DEFAULT_TIMEOUT = 300.0
+from dify_plugin_client.utils import (
+    DEFAULT_CONFIG_PATH,
+    DEFAULT_KEY,
+    DEFAULT_URL,
+    build_permission_lookup,
+    json_default_serializer,
+    load_settings,
+    parse_json_arg,
+    plugin_permission_summary,
+    resolve_client_config,
+)
 TENANT_REQUIRED_COMMANDS = {
     "list",
     "upload-pkg",
@@ -25,88 +31,25 @@ TENANT_REQUIRED_COMMANDS = {
 }
 
 
-def _json_default_serializer(obj: Any) -> Any:
-    """
-    Serializer that can handle Pydantic models and bytes.
-    """
-    if hasattr(obj, "model_dump"):
-        return obj.model_dump()
-    if isinstance(obj, (bytes, bytearray)):
-        return obj.decode("utf-8", errors="replace")
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-
-
-def _parse_json_arg(value: str | None, file_path: str | None, default: dict[str, Any]) -> dict[str, Any]:
-    """
-    Parse a JSON argument from a string or a file.
-    """
-    if value and file_path:
-        raise ValueError("Provide either the inline value or the file path, not both.")
-    if file_path:
-        return json.loads(Path(file_path).read_text())
-    if value:
-        return json.loads(value)
-    return default
-
-
-def _load_settings(path: Path) -> dict[str, Any]:
-    """
-    Load optional CLI defaults from a config file (expects a JSON object).
-    """
-
-    resolved = path.expanduser()
-    if not resolved.exists():
-        return {}
-    if resolved.is_dir():
-        raise ValueError(f"Config path {resolved} is a directory, expected a file.")
-
-    try:
-        raw = resolved.read_text().strip()
-    except OSError as exc:
-        raise ValueError(f"Failed to read config file {resolved}: {exc}") from exc
-
-    if not raw:
-        return {}
-
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Config file must be valid JSON: {exc}") from exc
-
-    if not isinstance(parsed, dict):
-        raise ValueError("Config file must contain a JSON object at the top level.")
-
-    return parsed
-
-
-def _coerce_timeout(*candidates: Any) -> float:
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        if isinstance(candidate, (int, float)):
-            return float(candidate)
-        if isinstance(candidate, str):
-            try:
-                return float(candidate)
-            except ValueError as exc:
-                raise ValueError("Timeout must be a number") from exc
-    return DEFAULT_TIMEOUT
-
-
 def _resolve_settings(args: argparse.Namespace, parser: argparse.ArgumentParser) -> argparse.Namespace:
     config_path = Path(getattr(args, "config", DEFAULT_CONFIG_PATH))
-    settings = _load_settings(config_path)
+    settings = load_settings(config_path)
 
     env_settings = {
-        "url": os.getenv("DIFY_PLUGIN_DAEMON_URL"),
-        "key": os.getenv("DIFY_PLUGIN_DAEMON_KEY"),
-        "timeout": os.getenv("DIFY_PLUGIN_DAEMON_TIMEOUT"),
         "tenant": os.getenv("DIFY_PLUGIN_TENANT_ID") or os.getenv("DIFY_PLUGIN_TENANT"),
     }
 
-    args.url = args.url or env_settings["url"] or settings.get("url") or DEFAULT_URL
-    args.key = args.key or env_settings["key"] or settings.get("key") or DEFAULT_KEY
-    args.timeout = _coerce_timeout(args.timeout, env_settings["timeout"], settings.get("timeout"), DEFAULT_TIMEOUT)
+    client_config = resolve_client_config(
+        url=args.url,
+        key=args.key,
+        timeout=args.timeout,
+        config_path=config_path,
+        env=os.environ,
+    )
+
+    args.url = client_config.url or DEFAULT_URL
+    args.key = client_config.key or DEFAULT_KEY
+    args.timeout = client_config.timeout
 
     if hasattr(args, "tenant"):
         args.tenant = args.tenant or env_settings["tenant"] or settings.get("tenant")
@@ -119,12 +62,15 @@ def _resolve_settings(args: argparse.Namespace, parser: argparse.ArgumentParser)
 
 
 def _build_client(args: argparse.Namespace) -> DifyPluginClient:
-    config = PluginConfig(
-        url=args.url,
-        key=args.key,
-        timeout=args.timeout,
+    return DifyPluginClient(
+        resolve_client_config(
+            url=args.url,
+            key=args.key,
+            timeout=args.timeout,
+            config_path=getattr(args, "config", DEFAULT_CONFIG_PATH),
+            env=os.environ,
+        )
     )
-    return DifyPluginClient(config)
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
@@ -265,7 +211,7 @@ def _handle_list(args: argparse.Namespace) -> int:
     client = _build_client(args)
     if args.with_total:
         result = client.list_plugins_with_total(args.tenant, args.page, args.page_size)
-        print(json.dumps(result, indent=2, default=_json_default_serializer))
+        print(json.dumps(result, indent=2, default=json_default_serializer))
         return 0
 
     plugins = client.list_plugins(args.tenant)
@@ -274,7 +220,8 @@ def _handle_list(args: argparse.Namespace) -> int:
         return 0
 
     for plugin in plugins:
-        print(f"{plugin.name} ({plugin.plugin_unique_identifier})")
+        permission_summary = plugin_permission_summary(plugin)
+        print(f"{plugin.name} ({plugin.plugin_unique_identifier}) - permissions: {permission_summary}")
     return 0
 
 
@@ -298,7 +245,7 @@ def _handle_upload_bundle(args: argparse.Namespace) -> int:
         bundle=bundle_bytes,
         verify_signature=args.verify_signature,
     )
-    print(json.dumps(dependencies, indent=2, default=_json_default_serializer))
+    print(json.dumps(dependencies, indent=2, default=json_default_serializer))
     return 0
 
 
@@ -307,7 +254,7 @@ def _handle_install(args: argparse.Namespace) -> int:
 
     identifiers: list[str] = []
     metas: list[dict[str, Any]] = []
-    meta = _parse_json_arg(args.meta, args.meta_file, default={})
+    meta = parse_json_arg(args.meta, args.meta_file, default={})
     if not isinstance(meta, dict):
         raise ValueError("--meta must be a JSON object")
 
@@ -344,7 +291,7 @@ def _handle_install(args: argparse.Namespace) -> int:
                 "identifiers": identifiers,
             },
             indent=2,
-            default=_json_default_serializer,
+            default=json_default_serializer,
         )
     )
 
@@ -353,9 +300,13 @@ def _handle_install(args: argparse.Namespace) -> int:
 
 def _handle_list_tools(args: argparse.Namespace) -> int:
     client = _build_client(args)
+    permission_lookup = build_permission_lookup(client, args.tenant)
+
     if args.provider:
         provider = client.fetch_tool_provider(args.tenant, args.provider)
-        print(json.dumps(provider, indent=2, default=_json_default_serializer))
+        provider_dict = provider.model_dump()
+        provider_dict["permission_summary"] = permission_lookup.get(provider.plugin_unique_identifier, "unknown")
+        print(json.dumps(provider_dict, indent=2, default=json_default_serializer))
         return 0
 
     providers = client.fetch_tool_providers(args.tenant)
@@ -363,15 +314,21 @@ def _handle_list_tools(args: argparse.Namespace) -> int:
         print("No tool providers found.")
         return 0
 
-    print(json.dumps(providers, indent=2, default=_json_default_serializer))
+    enriched = []
+    for provider in providers:
+        provider_dict = provider.model_dump()
+        provider_dict["permission_summary"] = permission_lookup.get(provider.plugin_unique_identifier, "unknown")
+        enriched.append(provider_dict)
+
+    print(json.dumps(enriched, indent=2, default=json_default_serializer))
     return 0
 
 
 def _handle_invoke(args: argparse.Namespace) -> int:
     client = _build_client(args)
 
-    credentials = _parse_json_arg(args.credentials, args.credentials_file, default={})
-    parameters = _parse_json_arg(args.params, args.params_file, default={})
+    credentials = parse_json_arg(args.credentials, args.credentials_file, default={})
+    parameters = parse_json_arg(args.params, args.params_file, default={})
 
     response_stream = client.invoke(
         tenant_id=args.tenant,
@@ -386,7 +343,8 @@ def _handle_invoke(args: argparse.Namespace) -> int:
         if message.type == ToolInvokeMessage.MessageType.TEXT:
             print(message.message.text, end="", flush=True)
         elif message.type == ToolInvokeMessage.MessageType.JSON:
-            print(json.dumps(message.message.data, indent=2, default=_json_default_serializer))
+            payload = message.message.normalized if message.message else {}
+            print(json.dumps(payload, indent=2, default=json_default_serializer))
         else:
             print(f"[{message.type}] {message.message}")
 

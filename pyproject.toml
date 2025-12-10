@@ -5,7 +5,7 @@ description = "A standalone client for interacting with a Dify plugin daemon."
 readme = "README.md"
 keywords = ["dify", "plugin", "client", "cli"]
 authors = [{ name = "qieqie", email = "admin@qieqie.me" }]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "httpx",
     "pydantic",
@@ -17,7 +17,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

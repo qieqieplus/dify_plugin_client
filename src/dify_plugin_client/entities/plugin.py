@@ -12,10 +12,19 @@ from .common import I18nObject
 
 
 class PluginInstallationSource(StrEnum):
-    Github = auto()
-    Marketplace = auto()
-    Package = auto()
-    Remote = auto()
+    Github = "github"
+    Marketplace = "marketplace"
+    Package = "package"
+    Remote = "remote"
+
+    @classmethod
+    def _missing_(cls, value: object):
+        match str(value):
+            case "1": return cls.Github
+            case "2": return cls.Marketplace
+            case "3": return cls.Package
+            case "4": return cls.Remote
+            case _: return None
 
 
 class PluginResourceRequirements(BaseModel):
@@ -64,11 +73,11 @@ class PluginCategory(StrEnum):
 
 class PluginDeclaration(BaseModel):
     class Plugins(BaseModel):
-        tools: list[str] | None = Field(default_factory=list[str])
-        models: list[str] | None = Field(default_factory=list[str])
-        endpoints: list[str] | None = Field(default_factory=list[str])
-        datasources: list[str] | None = Field(default_factory=list[str])
-        triggers: list[str] | None = Field(default_factory=list[str])
+        tools: list[str] | None = Field(default_factory=list)
+        models: list[str] | None = Field(default_factory=list)
+        endpoints: list[str] | None = Field(default_factory=list)
+        datasources: list[str] | None = Field(default_factory=list)
+        triggers: list[str] | None = Field(default_factory=list)
 
     class Meta(BaseModel):
         minimum_dify_version: str | None = Field(default=None)

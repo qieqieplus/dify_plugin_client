@@ -519,23 +519,39 @@ class DifyPluginClient(BasePluginClient):
             return value
 
         match param.type:
-            case ToolParameter.ToolParameterType.STRING | ToolParameter.ToolParameterType.SECRET_INPUT:
+            case (
+                ToolParameter.ToolParameterType.STRING
+                | ToolParameter.ToolParameterType.TEXT_INPUT
+                | ToolParameter.ToolParameterType.APP_SELECTOR
+                | ToolParameter.ToolParameterType.MODEL_SELECTOR
+                | ToolParameter.ToolParameterType.SECRET_INPUT
+            ):
                 if value is None:
                     if param.required:
                         raise ValueError(f"tool parameter {param.name} is required")
                     return ""
                 return value if isinstance(value, str) else str(value)
-            case ToolParameter.ToolParameterType.SELECT:
+            case ToolParameter.ToolParameterType.SELECT | ToolParameter.ToolParameterType.DYNAMIC_SELECT:
                 if value is None:
                     if param.required:
                         raise ValueError(f"tool parameter {param.name} is required")
                     return ""
                 if param.options:
                     options = param.options
-                    if value not in options:
-                        raise ValueError(f"tool parameter {param.name} value {value} not in options {options}")
+
+                    def _option_value(opt: Any) -> Any:
+                        if isinstance(opt, dict):
+                            return opt.get("value", opt)
+                        # gracefully handle objects with `value` attribute (e.g. pydantic models)
+                        return getattr(opt, "value", opt)
+
+                    allowed_values = [_option_value(opt) for opt in options]
+                    if value not in allowed_values:
+                        raise ValueError(
+                            f"tool parameter {param.name} value {value} not in options {allowed_values}"
+                        )
                 return value if isinstance(value, str) else str(value)
-            case ToolParameter.ToolParameterType.BOOLEAN:
+            case ToolParameter.ToolParameterType.BOOLEAN | ToolParameter.ToolParameterType.CHECKBOX:
                 if value is None:
                     return False
                 if isinstance(value, str):
@@ -547,6 +563,8 @@ class DifyPluginClient(BasePluginClient):
                 return bool(value)
             case ToolParameter.ToolParameterType.NUMBER:
                 if value is None:
+                    if param.required:
+                        raise ValueError(f"tool parameter {param.name} is required")
                     return 0
                 if isinstance(value, (int, float)):
                     return value
@@ -562,9 +580,17 @@ class DifyPluginClient(BasePluginClient):
                         raise ValueError("This parameter only accepts one file but got multiple files while invoking.")
                     return value[0]
                 return value
-            case ToolParameter.ToolParameterType.FILES | ToolParameter.ToolParameterType.ARRAY:
+            case (
+                ToolParameter.ToolParameterType.FILES
+                | ToolParameter.ToolParameterType.ARRAY
+                | ToolParameter.ToolParameterType.TOOLS_SELECTOR
+            ):
                 if value is None:
+                    if param.required:
+                        raise ValueError(f"tool parameter {param.name} is required")
                     return []
                 return value if isinstance(value, list) else [value]
+            case ToolParameter.ToolParameterType.ANY | ToolParameter.ToolParameterType.OBJECT:
+                return value
             case _:
                 return value

@@ -34,7 +34,7 @@ class ToolProviderIdentity(BaseModel):
     icon: str = Field(..., description="The icon of the tool")
     label: I18nObject = Field(..., description="The label of the tool")
     tags: list[ToolLabelEnum] | None = Field(
-        default=[],
+        default_factory=list,
         description="The tags of the tool",
     )
 
@@ -55,13 +55,21 @@ class ToolDescription(BaseModel):
 class ToolParameter(BaseModel):
     class ToolParameterType(StrEnum):
         STRING = "string"
+        TEXT_INPUT = "text-input"
         NUMBER = "number"
         BOOLEAN = "boolean"
         SELECT = "select"
+        DYNAMIC_SELECT = "dynamic-select"
+        APP_SELECTOR = "app-selector"
+        MODEL_SELECTOR = "model-selector"
+        TOOLS_SELECTOR = "array[tools]"
+        ANY = "any"
+        OBJECT = "object"
+        CHECKBOX = "checkbox"
         SECRET_INPUT = "secret-input"
         FILE = "file"
         FILES = "files"
-        ARRAY = "array"  # legacy daemon type; treat like a list of values
+        ARRAY = "array"
 
     class ToolParameterForm(StrEnum):
         SCHEMA = "schema"
@@ -79,13 +87,13 @@ class ToolParameter(BaseModel):
 
 class ToolEntity(BaseModel):
     identity: ToolIdentity
-    parameters: list[ToolParameter] = Field(default_factory=list[ToolParameter])
+    parameters: list[ToolParameter] = Field(default_factory=list)
     description: ToolDescription | None = None
 
 
 class ToolProviderEntity(BaseModel):
     identity: ToolProviderIdentity
-    tools: list[ToolEntity] = Field(default_factory=list[ToolEntity])
+    tools: list[ToolEntity] = Field(default_factory=list)
 
 
 class ToolInvokeMessage(BaseModel):
